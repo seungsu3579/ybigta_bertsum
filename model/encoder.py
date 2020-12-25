@@ -1,8 +1,10 @@
 # pytorch
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .attention import *
+from utils import *
 
 
 class EncoderLayer(nn.Module):
@@ -56,7 +58,8 @@ class SecondEncoder(Encoder):
         super().__init__(config, n_layer)
     
     def forward(self, inputs, cls_inputs):
-        positions = torch.arange(cls_inputs.size(1), device=cls_inputs.device, dtype=cls_inputs.dtype).expand(cls_inputs.size(0), cls_inputs.size(1)).contiguous() + 1
+        device = inputs.device
+        positions = torch.arange(cls_inputs.size(1), device=device, dtype=cls_inputs.dtype).expand(cls_inputs.size(0), cls_inputs.size(1)).contiguous() + 1
         pos_mask = cls_inputs.eq(self.config.i_pad)
         positions.masked_fill_(pos_mask, 0)
 
@@ -67,7 +70,6 @@ class SecondEncoder(Encoder):
         for layer in self.layers:
             outputs, attn_prob = layer(outputs, attn_mask)
             attn_probs.append(attn_prob)
-
         return outputs, attn_probs
 
 
@@ -79,7 +81,7 @@ class BertEncoder(nn.Module):
     def gen_attention_mask(self, token_ids):
         ## masked attenion, 패딩에 패널티 부여, 학습 x
         attention_mask = token_ids.ne(1)
-        return attention_mask.float()
+        return attention_mask.float().to(token_ids.device)
     
     def forward(self, token_ids):
         attention_mask = self.gen_attention_mask(token_ids)
@@ -109,11 +111,68 @@ def embedding(encoder, batch, num):
     flag = True
     for i in range(len(batch)):
         output, hidden = encoder(batch[i][:num[i]].long())
-        pad_num = max_sentence_num - num[i]
+        pad_num = len(batch[0]) - num[i]
+        if pad_num < 0:
+            pad_num = 0
         article = torch.cat([output[:, 0, :], torch.ones(pad_num,768)], dim=0).unsqueeze(0)
+
         if flag:
-        embedded_batch = torch.cat([article, ], dim=0)
-        flag=False
+            embedded_batch = torch.cat([article, ], dim=0)
+            flag=False
         else:
-        embedded_batch = torch.cat([embedded_batch, article], dim=0)
+            embedded_batch = torch.cat([embedded_batch, article], dim=0)
+
     return embedded_batch
+
+
+
+#############################
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(0), :]
+        return self.dropout(x)
+
+
+
+class TransformerModel(nn.Module):
+
+    def __init__(self, ninp, nhead, nhid, nlayers, dropout=0.5):
+        super(TransformerModel, self).__init__()
+        from torch.nn import TransformerEncoder, TransformerEncoderLayer
+
+        self.src_mask = None
+        self.pos_encoder = PositionalEncoding(ninp, dropout)
+        encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
+        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
+        self.ninp = ninp
+      
+    def _generate_square_subsequent_mask(self, sz):
+        # mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = torch.ones(sz, sz)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def forward(self, src):
+        device = src.device
+        mask = self._generate_square_subsequent_mask(len(src)).to(device)
+        self.src_mask = mask
+
+        src *= math.sqrt(self.ninp)
+        src = self.pos_encoder(src)
+        output = self.transformer_encoder(src, self.src_mask)
+        # output = self.transformer_encoder(src)
+
+        return output

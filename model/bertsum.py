@@ -13,8 +13,7 @@ class BERTSummarizer(nn.Module):
         self.device = device
 
     def forward(self, new_batch, num):
-
-        # reduce dimension for ram space
+    # reduce dimension for ram space
         new_batch = self.reducer(new_batch)
 
         # second layer  >> [batch, sentence_num, vector]

@@ -3,14 +3,14 @@ import numpy as np
 import torch
 
 class Config(dict):
-  __getattr__ = dict.__getitem__
-  __setattr__ = dict.__setitem__
+    __getattr__ = dict.__getitem__
+    __setattr__ = dict.__setitem__
 
-  @classmethod
-  def load(cls, file):
-    with open(file,'r') as f:
-      config = json.loads(f.read())
-      return Config(config)
+    @classmethod
+    def load(cls, file):
+        with open(file,'r') as f:
+            config = json.loads(f.read())
+            return Config(config)
 
 
 #positional encoding function

@@ -39,35 +39,13 @@ def save_checkpoint(epoch, model, optimizer, scheduler, loss_list, PATH):
         }, PATH)
 
 
-###### hyper parameter #####
-max_sentence_num = 64
-max_word_num = 64
-num_workers = 5
-batch_size = 2
-learning_rate = 1e-5
-num_epochs = 1000
-embedding_vector_size = 128
-
-config = Config({
-    "n_enc_vocab": len(vocab),
-    "n_dec_vocab": len(vocab),
-    "n_enc_seq":embedding_vector_size,
-    "n_layer":6,
-    "d_hidn":embedding_vector_size,
-    "i_pad":1,
-    "d_ff":1024,
-    "n_head":4,
-    "d_head":64,
-    "dropout":0.1,
-    "layer_norm_epsilon":1e-12
-})
-
-
 if __name__ == '__main__':
 
 
     ###### setting device ######
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = 'cpu'
+    print(f"## Device : {device} ##")
 
 
     ####### load KoBERT ########
@@ -75,20 +53,53 @@ if __name__ == '__main__':
     tokenizer = get_tokenizer()
     tok = nlp.data.BERTSPTokenizer(tokenizer, vocab, lower=False)
 
+
+    ###### hyper parameter #####
+    max_sentence_num = 64
+    max_word_num = 64
+    num_workers = 5
+    batch_size = 32
+    learning_rate = 1e-5
+    num_epochs = 1000
+    embedding_vector_size = 128
+
+    emsize = 128 # 임베딩 차원
+    nhid = 128 # nn.TransformerEncoder 에서 피드포워드 네트워크(feedforward network) 모델의 차원
+    nlayers = 2 # nn.TransformerEncoder 내부의 nn.TransformerEncoderLayer 개수
+    nhead = 2 # 멀티헤드 어텐션(multi-head attention) 모델의 헤드 개수
+    dropout = 0.2 # 드랍아웃(dropout) 값
+
+    config = Config({
+        "n_enc_vocab": len(vocab),
+        "n_dec_vocab": len(vocab),
+        "n_enc_seq":embedding_vector_size,
+        "n_layer":6,
+        "d_hidn":embedding_vector_size,
+        "i_pad":1,
+        "d_ff":1024,
+        "n_head":4,
+        "d_head":64,
+        "dropout":0.1,
+        "layer_norm_epsilon":1e-12
+    })
+
+
     ######### load data ########
-    df = pd.read_json("data/train.jsonl", lines=True)
+    dataset = pd.read_json("data/train.jsonl", lines=True)
+    print("\n## Data Loading ##")
+    dataset = ArticleLineDataset(dataset[:100], "article_original", "extractive", tok, max_sentence_num, max_word_num, True, False)
 
-    train_dataset = ArticleLineDataset(df[:500], "article_original", "extractive", tok, max_sentence_num, max_word_num, True, False)
-
-    train_loader = MyDataLoader(train_dataset, batch_size=batch_size)
+    # train_loader = MyDataLoader(dataset, batch_size=batch_size)
+    train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
 
     ######## model init ########
     encoder = BertEncoder(bertmodel)
 
-    reducer = DimensionReducer(768, embedding_vector_size)
-    second = SecondEncoder(config=config, n_layer=1)
-    classifier = BinaryClassifier(embedding_vector_size)
+    reducer = DimensionReducer(768, emsize)
+    # second = SecondEncoder(config=config, n_layer=1)
+    second = TransformerModel(emsize, nhead, nhid, nlayers, dropout)
+    classifier = BinaryClassifier(emsize)
 
     model = BERTSummarizer(config, reducer, second, classifier, device)
 
@@ -102,13 +113,13 @@ if __name__ == '__main__':
         
 
     #### logging model info ####
-    print("## model layer info ##")
+    print("\n## Model Layer Info ##")
     for name, param in model.named_parameters():
         if param.requires_grad:
             print(name, param.data.shape)
-    print("\n## model params num ##")
+    print("\n## Model Params Num ##")
     pytorch_total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"parameter number > {pytorch_total_params}")
+    print(f"> {pytorch_total_params}")
     print("\n======================")
 
 
@@ -155,39 +166,40 @@ if __name__ == '__main__':
             loss.backward()
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-            
+
             optimizer.step() 
             scheduler.step()
 
             ## accuracy 계산
-            _, topi = outputs.permute(0,2,1).topk(1)
-            topi = topi.squeeze()
-            accuracy = (label == topi).float().mean()
+            answer = 0
+            total = 0
+            for i in range(len(output)):
+                pred = output[i].squeeze()
+                answ = label[i].squeeze()
+                mask = torch.zeros(output[i].squeeze().shape)
+                for k in range(3):
+                    max_v = max(pred)
+                    for idx in range(len(pred)):
+                        if pred[idx] == max_v:
+                            mask[idx] = 1
+                            pred[idx] = -1
+                            break
 
-            if (i+1) % print_every == 0: ## 상태 출력
-                print('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}, Accuracy: {:.2f}%'.format(
-                    epoch+1, num_epochs, i+1, len(train_loader), loss.item(), accuracy.item() * 100))
+                for idx in range(len(mask)):
+                    if answ[idx] == 1:
+                        total += 1
+                        if mask[idx] == 1:
+                            answer += 1
+            accuracy = answer / total
+
+            if (i+1) % 1 == 0: ## 상태 출력
+                print(f'Epoch [{epoch+1}/{num_epochs}], Step [{i+1}/{len(train_loader)}], Loss: {loss.item():.4f}, Accuracy: {accuracy:.2f}%')
                 loss_list.append(loss.item())
-                translate_example(token_ids, valid_length, outputs.permute(0,2,1), label, label_length)
-
             
         ## checkpoint 저장
-        if (epoch+1) % save_every == 0:
-        if not os.path.exists("model"):
-            os.makedirs("model")
-        save_checkpoint(epoch+1, model, optimizer, scheduler, loss_list, "model/checkpoint_2_"+str(epoch+1)+".tar")
-        print("checkpoint saved!")
+        if (epoch+1) % 10 == 0:
+            if not os.path.exists("checkpoints"):
+                os.makedirs("checkpoints")
+            save_checkpoint(epoch+1, model, optimizer, scheduler, loss_list, f"checkpoints/checkpoint_{str(epoch+1)}.tar")
+            print("checkpoint saved!")
 
-
-
-
-
-
-
-
-
-
-
-
-
-    save_checkpoint(epoch, model, optimizer, scheduler, loss_list, PATH)

@@ -165,3 +165,7 @@ dmypy.json
 
 # model params
 *.model
+
+# data 
+/data
+/checkpoints
