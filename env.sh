@@ -1,11 +1,13 @@
 #!/bin/bash
 
-echo "###### Step1 ######\n"
+echo "###### Step1 ######"
 git clone https://github.com/SKTBrain/KoBERT.git
 
 cd KoBERT
 
-echo "\n###### Step2 ######\n"
+echo ""
+echo "###### Step2 ######"
+
 pip install .
 pip install -r requirements.txt
 pip install mxnet-cu101
