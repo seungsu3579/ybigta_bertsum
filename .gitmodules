@@ -1,0 +1,6 @@
+[submodule "KoBERT"]
+	path = KoBERT
+	url = https://github.com/SKTBrain/KoBERT.git
+[submodule "3-lines-summary-WEB"]
+	path = 3-lines-summary-WEB
+	url = https://github.com/hw79chopin/3-lines-summary
